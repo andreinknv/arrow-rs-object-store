@@ -1025,11 +1025,11 @@ impl GetOptionsExt for HttpRequestBuilder {
 
         const DATE_FORMAT: &str = "%a, %d %b %Y %H:%M:%S GMT";
         if let Some(date) = if_unmodified_since {
-            self = self.header(IF_UNMODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
+            self = self.header(IF_UNMODIFIED_SINCE, date.strftime(DATE_FORMAT).to_string());
         }
 
         if let Some(date) = if_modified_since {
-            self = self.header(IF_MODIFIED_SINCE, date.format(DATE_FORMAT).to_string());
+            self = self.header(IF_MODIFIED_SINCE, date.strftime(DATE_FORMAT).to_string());
         }
 
         self = self.extensions(extensions);

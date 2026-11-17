@@ -28,13 +28,13 @@ use crate::client::{
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
-use chrono::{DateTime, SecondsFormat, Utc};
 use http::Method;
 use http::header::{
     ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH, CONTENT_TYPE, DATE,
     HeaderMap, HeaderName, HeaderValue, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
     IF_UNMODIFIED_SINCE, RANGE,
 };
+use jiff::Timestamp;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -166,8 +166,8 @@ pub mod authority_hosts {
 
 pub(crate) struct AzureSigner {
     signing_key: AzureAccessKey,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
+    start: Timestamp,
+    end: Timestamp,
     account: String,
     delegation_key: Option<UserDelegationKey>,
 }
@@ -176,8 +176,8 @@ impl AzureSigner {
     pub(crate) fn new(
         signing_key: AzureAccessKey,
         account: String,
-        start: DateTime<Utc>,
-        end: DateTime<Utc>,
+        start: Timestamp,
+        end: Timestamp,
         delegation_key: Option<UserDelegationKey>,
     ) -> Self {
         Self {
@@ -219,8 +219,8 @@ impl AzureSigner {
 
 fn add_date_and_version_headers(request: &mut HttpRequest) {
     // rfc2822 string should never contain illegal characters
-    let date = Utc::now();
-    let date_str = date.format(RFC1123_FMT).to_string();
+    let date = jiff::Timestamp::now();
+    let date_str = date.strftime(RFC1123_FMT).to_string();
     // we formatted the data string ourselves, so unwrapping should be fine
     let date_val = HeaderValue::from_str(&date_str).unwrap();
     request.headers_mut().insert(DATE, date_val);
@@ -386,8 +386,8 @@ fn string_to_sign_sas(
     u: &Url,
     method: &Method,
     account: &str,
-    start: &DateTime<Utc>,
-    end: &DateTime<Utc>,
+    start: &Timestamp,
+    end: &Timestamp,
 ) -> (String, String, String, String, String) {
     // NOTE: for now only blob signing is supported.
     let signed_resource = "b".to_string();
@@ -408,8 +408,8 @@ fn string_to_sign_sas(
         _ => "",
     }
     .to_string();
-    let signed_start = start.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let signed_expiry = end.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let signed_start = start.strftime("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let signed_expiry = end.strftime("%Y-%m-%dT%H:%M:%SZ").to_string();
     let canonicalized_resource = if u.host_str().unwrap_or_default().contains(account) {
         format!("/blob/{}{}", account, u.path())
     } else {
@@ -434,8 +434,8 @@ fn string_to_sign_service_sas(
     u: &Url,
     method: &Method,
     account: &str,
-    start: &DateTime<Utc>,
-    end: &DateTime<Utc>,
+    start: &Timestamp,
+    end: &Timestamp,
 ) -> (String, HashMap<&'static str, String>) {
     let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
         string_to_sign_sas(u, method, account, start, end);
@@ -477,8 +477,8 @@ fn string_to_sign_user_delegation_sas(
     u: &Url,
     method: &Method,
     account: &str,
-    start: &DateTime<Utc>,
-    end: &DateTime<Utc>,
+    start: &Timestamp,
+    end: &Timestamp,
     delegation_key: &UserDelegationKey,
 ) -> (String, HashMap<&'static str, String>) {
     let (signed_resource, signed_permissions, signed_start, signed_expiry, canonicalized_resource) =
@@ -893,23 +893,20 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
 }
 
 mod az_cli_date_format {
-    use chrono::{DateTime, TimeZone};
     use serde::{self, Deserialize, Deserializer};
 
-    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<chrono::Local>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<jiff::ZonedDateTime, D::Error>
     where
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
         // expiresOn from azure cli uses the local timezone
-        let date = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S.%6f")
+        let date = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S.%6f", &s)
             .map_err(serde::de::Error::custom)?;
-        chrono::Local
-            .from_local_datetime(&date)
-            .single()
-            .ok_or(serde::de::Error::custom(
-                "azure cli returned ambiguous expiry date",
-            ))
+        jiff::tz::TimeZone::system()
+            .to_ambiguous_zoned_datetime(date)
+            .unambiguous()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -918,7 +915,7 @@ mod az_cli_date_format {
 struct AzureCliTokenResponse {
     pub access_token: String,
     #[serde(with = "az_cli_date_format")]
-    pub expires_on: DateTime<chrono::Local>,
+    pub expires_on: jiff::ZonedDateTime,
     pub token_type: String,
 }
 
@@ -971,12 +968,12 @@ impl AzureCliCredential {
                     });
                 }
                 let duration =
-                    token_response.expires_on.naive_local() - chrono::Local::now().naive_local();
+                    token_response.expires_on.datetime() - jiff::ZonedDateTime::now().datetime();
                 Ok(TemporaryToken {
                     token: Arc::new(AzureCredential::BearerToken(token_response.access_token)),
                     expiry: Some(
                         Instant::now()
-                            + duration.to_std().map_err(|_| Error::AzureCli {
+                            + duration.try_into().map_err(|_| Error::AzureCli {
                                 message: "az returned invalid lifetime".to_string(),
                             })?,
                     ),

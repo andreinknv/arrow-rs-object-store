@@ -30,16 +30,16 @@ pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 // deserialize dates according to rfc1123
 #[cfg(any(feature = "azure-base", feature = "http-base"))]
-pub(crate) fn deserialize_rfc1123<'de, D>(
-    deserializer: D,
-) -> Result<chrono::DateTime<chrono::Utc>, D::Error>
+pub(crate) fn deserialize_rfc1123<'de, D>(deserializer: D) -> Result<jiff::Timestamp, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
     let naive =
-        chrono::NaiveDateTime::parse_from_str(&s, RFC1123_FMT).map_err(serde::de::Error::custom)?;
-    Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
+        jiff::civil::DateTime::strptime(RFC1123_FMT, &s).map_err(serde::de::Error::custom)?;
+    jiff::tz::Offset::UTC
+        .to_timestamp(naive)
+        .map_err(serde::de::Error::custom)
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk

@@ -30,9 +30,9 @@ use std::{collections::VecDeque, path::PathBuf};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use futures_util::{FutureExt, TryStreamExt};
 use futures_util::{StreamExt, stream::BoxStream};
+use jiff::Timestamp;
 use parking_lot::Mutex;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
@@ -1424,11 +1424,12 @@ fn convert_entry(entry: DirEntry, location: Path) -> Result<Option<ObjectMeta>> 
     }
 }
 
-fn last_modified(metadata: &Metadata) -> DateTime<Utc> {
+fn last_modified(metadata: &Metadata) -> Timestamp {
     metadata
         .modified()
         .expect("Modified file time should be supported on this platform")
-        .into()
+        .try_into()
+        .expect("filesystem time fits Jiff")
 }
 
 fn get_etag(metadata: &Metadata) -> String {
